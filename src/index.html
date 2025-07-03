@@ -28,12 +28,11 @@
                 <h2>文件选择</h2>
                 <div class="file-section">
                     <div class="input-group">
-                        <label for="inputPath">输入文件/文件夹：</label>
+                        <label for="inputPath">选择文件：</label>
                         <div class="file-input-group">
-                            <input type="text" id="inputPath" placeholder="选择 PDF、PNG、JPG 文件或文件夹" readonly>
-                            <button id="selectInputBtn" class="btn btn-secondary">浏览</button>
+                            <button id="selectInputBtn" class="btn btn-secondary">选择文件</button>
+                            <span class="help-text">支持 PDF、PNG、JPG、JPEG 格式文件，可多选</span>
                         </div>
-                        <small class="help-text">支持 PDF、PNG、JPG、JPEG 格式文件</small>
                     </div>
 
                     <div class="input-group">
@@ -43,6 +42,44 @@
                             <button id="selectOutputBtn" class="btn btn-secondary">浏览</button>
                         </div>
                     </div>
+                </div>
+            </section>
+
+            <!-- 文件队列区域 -->
+            <section class="section">
+                <div class="queue-header">
+                    <h2>文件队列 (<span id="queueCount">0</span>)</h2>
+                    <div class="queue-actions">
+                        <button id="clearQueueBtn" class="btn btn-small btn-secondary">清空队列</button>
+                        <button id="startProcessingBtn" class="btn btn-small btn-primary" disabled>开始批量解析</button>
+                        <button id="stopProcessingBtn" class="btn btn-small btn-secondary" style="display: none;">停止解析</button>
+                    </div>
+                </div>
+                
+                <div class="queue-status" id="queueStatus" style="display: none;">
+                    <div class="status-item">
+                        <span class="status-label">等待：</span>
+                        <span id="pendingCount">0</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">已完成：</span>
+                        <span id="completedCount">0</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">错误：</span>
+                        <span id="errorCount">0</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">当前：</span>
+                        <span id="currentProcessingFile">无</span>
+                    </div>
+                </div>
+
+                <div class="queue-container" id="queueContainer">
+                    <div class="queue-empty" id="queueEmpty">
+                        <p>暂无文件，请选择文件添加到队列</p>
+                    </div>
+                    <div class="queue-list" id="queueList"></div>
                 </div>
             </section>
 
@@ -156,7 +193,6 @@
                 <div class="action-buttons">
                     <button id="saveSettingsBtn" class="btn btn-secondary">保存设置</button>
                     <button id="loadSettingsBtn" class="btn btn-secondary">加载设置</button>
-                    <button id="executeBtn" class="btn btn-primary" disabled>开始解析</button>
                 </div>
             </section>
 
@@ -172,15 +208,6 @@
                 </div>
             </section>
         </main>
-
-        <!-- 加载遮罩 -->
-        <div id="loadingOverlay" class="loading-overlay" style="display: none;">
-            <div class="loading-content">
-                <div class="spinner"></div>
-                <p>正在解析，请稍候...</p>
-                <button id="cancelBtn" class="btn btn-secondary">取消</button>
-            </div>
-        </div>
     </div>
 
     <script src="renderer.js"></script>

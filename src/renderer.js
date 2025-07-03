@@ -1,10 +1,24 @@
 // DOM 元素
 const elements = {
     // 文件选择
-    inputPath: document.getElementById('inputPath'),
     outputPath: document.getElementById('outputPath'),
     selectInputBtn: document.getElementById('selectInputBtn'),
     selectOutputBtn: document.getElementById('selectOutputBtn'),
+    
+    // 队列管理
+    queueCount: document.getElementById('queueCount'),
+    queueEmpty: document.getElementById('queueEmpty'),
+    queueList: document.getElementById('queueList'),
+    queueStatus: document.getElementById('queueStatus'),
+    pendingCount: document.getElementById('pendingCount'),
+    completedCount: document.getElementById('completedCount'),
+    errorCount: document.getElementById('errorCount'),
+    currentProcessingFile: document.getElementById('currentProcessingFile'),
+    
+    // 队列操作按钮
+    clearQueueBtn: document.getElementById('clearQueueBtn'),
+    startProcessingBtn: document.getElementById('startProcessingBtn'),
+    stopProcessingBtn: document.getElementById('stopProcessingBtn'),
     
     // 参数配置
     method: document.getElementById('method'),
@@ -20,22 +34,20 @@ const elements = {
     source: document.getElementById('source'),
     
     // 操作按钮
-    executeBtn: document.getElementById('executeBtn'),
     saveSettingsBtn: document.getElementById('saveSettingsBtn'),
     loadSettingsBtn: document.getElementById('loadSettingsBtn'),
     clearLogBtn: document.getElementById('clearLogBtn'),
     openOutputFolderBtn: document.getElementById('openOutputFolderBtn'),
-    cancelBtn: document.getElementById('cancelBtn'),
     installCondaBtn: document.getElementById('installCondaBtn'),
     
     // 状态和日志
     statusIndicator: document.getElementById('statusIndicator'),
-    logOutput: document.getElementById('logOutput'),
-    loadingOverlay: document.getElementById('loadingOverlay')
+    logOutput: document.getElementById('logOutput')
 };
 
 // 应用状态
-let isExecuting = false;
+let fileQueue = [];
+let isProcessing = false;
 let currentOutputPath = '';
 
 // 初始化应用
@@ -46,13 +58,14 @@ async function initializeApp() {
     // 加载保存的设置
     await loadSettings();
     
+    // 加载文件队列
+    await loadFileQueue();
+    
     // 绑定事件监听器
     bindEventListeners();
     
-    // 监听 MinerU 输出
-    window.electronAPI.onMinerUOutput((event, data) => {
-        appendLog(data.data, data.type);
-    });
+    // 监听队列相关事件
+    setupQueueEventListeners();
 }
 
 // 检查 MinerU 状态
@@ -68,25 +81,25 @@ async function checkMinerUStatus() {
             statusDot.className = 'status-dot connected';
             statusText.textContent = 'MinerU 已就绪';
             installCondaBtn.style.display = 'none';
-            updateExecuteButtonState();
+            updateProcessingButtonState();
         } else if (result.needsCondaInstall) {
             statusDot.className = 'status-dot error';
             statusText.textContent = 'Conda 未安装';
             installCondaBtn.style.display = 'block';
-            elements.executeBtn.disabled = true;
+            elements.startProcessingBtn.disabled = true;
             appendLog('错误: 未检测到 Conda 安装。请先安装 Conda。', 'error');
         } else {
             statusDot.className = 'status-dot error';
             statusText.textContent = 'MinerU 未安装';
             installCondaBtn.style.display = 'none';
-            elements.executeBtn.disabled = true;
+            elements.startProcessingBtn.disabled = true;
             appendLog('错误: 未检测到 MinerU 安装。请先安装 MinerU。', 'error');
         }
     } catch (error) {
         statusDot.className = 'status-dot error';
         statusText.textContent = '状态检查失败';
         installCondaBtn.style.display = 'none';
-        elements.executeBtn.disabled = true;
+        elements.startProcessingBtn.disabled = true;
         appendLog(`状态检查失败: ${error.message}`, 'error');
     }
 }
@@ -94,21 +107,23 @@ async function checkMinerUStatus() {
 // 绑定事件监听器
 function bindEventListeners() {
     // 文件选择
-    elements.selectInputBtn.addEventListener('click', selectInputPath);
+    elements.selectInputBtn.addEventListener('click', selectInputFiles);
     elements.selectOutputBtn.addEventListener('click', selectOutputPath);
     
+    // 队列操作
+    elements.clearQueueBtn.addEventListener('click', clearQueue);
+    elements.startProcessingBtn.addEventListener('click', startQueueProcessing);
+    elements.stopProcessingBtn.addEventListener('click', stopQueueProcessing);
+    
     // 操作按钮
-    elements.executeBtn.addEventListener('click', executeMinerU);
     elements.saveSettingsBtn.addEventListener('click', saveSettings);
     elements.loadSettingsBtn.addEventListener('click', loadSettings);
     elements.clearLogBtn.addEventListener('click', clearLog);
     elements.openOutputFolderBtn.addEventListener('click', openOutputFolder);
-    elements.cancelBtn.addEventListener('click', cancelExecution);
     elements.installCondaBtn.addEventListener('click', installConda);
     
     // 输入变化监听
-    elements.inputPath.addEventListener('change', updateExecuteButtonState);
-    elements.outputPath.addEventListener('change', updateExecuteButtonState);
+    elements.outputPath.addEventListener('change', updateProcessingButtonState);
     
     // 后端变化监听（显示/隐藏 URL 输入）
     elements.backend.addEventListener('change', handleBackendChange);
@@ -119,16 +134,61 @@ function bindEventListeners() {
     });
 }
 
-// 选择输入路径
-async function selectInputPath() {
+// 设置队列事件监听器
+function setupQueueEventListeners() {
+    window.electronAPI.onQueueUpdated((event, queue) => {
+        fileQueue = queue;
+        updateQueueDisplay();
+    });
+    
+    window.electronAPI.onFileProcessingStarted((event, fileItem) => {
+        appendLog(`开始处理: ${fileItem.fileName}`, 'info');
+        updateProcessingStatus();
+    });
+    
+    window.electronAPI.onFileProcessingCompleted((event, fileItem) => {
+        if (fileItem.status === 'completed') {
+            appendLog(`✅ 完成: ${fileItem.fileName}`, 'success');
+        } else {
+            appendLog(`❌ 失败: ${fileItem.fileName} - ${fileItem.error}`, 'error');
+        }
+        updateProcessingStatus();
+    });
+    
+    window.electronAPI.onFileProgressUpdated((event, data) => {
+        updateFileProgress(data.fileId, data.progress);
+    });
+    
+    window.electronAPI.onQueueProcessingFinished((event) => {
+        isProcessing = false;
+        appendLog('🎉 队列处理完成！', 'success');
+        updateProcessingButtonsDisplay();
+        updateProcessingStatus();
+    });
+    
+    window.electronAPI.onProcessingStopped((event) => {
+        isProcessing = false;
+        appendLog('⏹️ 处理已停止', 'info');
+        updateProcessingButtonsDisplay();
+        updateProcessingStatus();
+    });
+    
+    window.electronAPI.onMinerUOutput((event, data) => {
+        const prefix = data.fileName ? `[${data.fileName}] ` : '';
+        appendLog(prefix + data.data, data.type);
+    });
+}
+
+// 选择输入文件
+async function selectInputFiles() {
     try {
-        const paths = await window.electronAPI.selectInputPath();
-        if (paths && paths.length > 0) {
-            elements.inputPath.value = paths.join(', ');
-            updateExecuteButtonState();
+        const newItems = await window.electronAPI.selectInputPath();
+        if (newItems && newItems.length > 0) {
+            appendLog(`添加了 ${newItems.length} 个文件到队列`, 'success');
+            updateProcessingButtonState();
         }
     } catch (error) {
-        appendLog(`选择输入文件失败: ${error.message}`, 'error');
+        appendLog(`选择文件失败: ${error.message}`, 'error');
     }
 }
 
@@ -139,7 +199,7 @@ async function selectOutputPath() {
         if (path) {
             elements.outputPath.value = path;
             currentOutputPath = path;
-            updateExecuteButtonState();
+            updateProcessingButtonState();
             elements.openOutputFolderBtn.disabled = false;
         }
     } catch (error) {
@@ -147,41 +207,159 @@ async function selectOutputPath() {
     }
 }
 
-// 更新执行按钮状态
-function updateExecuteButtonState() {
-    const hasInput = elements.inputPath.value.trim() !== '';
-    const hasOutput = elements.outputPath.value.trim() !== '';
-    const statusConnected = elements.statusIndicator.querySelector('.status-dot').classList.contains('connected');
-    
-    elements.executeBtn.disabled = !hasInput || !hasOutput || !statusConnected || isExecuting;
-}
-
-// 处理后端变化
-function handleBackendChange() {
-    const urlGroup = elements.url.closest('.input-group');
-    if (elements.backend.value === 'vlm-sglang-client') {
-        urlGroup.style.display = 'flex';
-    } else {
-        urlGroup.style.display = 'none';
-        elements.url.value = '';
+// 加载文件队列
+async function loadFileQueue() {
+    try {
+        const queue = await window.electronAPI.getFileQueue();
+        fileQueue = queue;
+        updateQueueDisplay();
+    } catch (error) {
+        appendLog(`加载队列失败: ${error.message}`, 'error');
     }
 }
 
-// 执行 MinerU
-async function executeMinerU() {
-    if (isExecuting) return;
+// 更新队列显示
+function updateQueueDisplay() {
+    elements.queueCount.textContent = fileQueue.length;
     
-    isExecuting = true;
-    elements.loadingOverlay.style.display = 'flex';
-    elements.executeBtn.disabled = true;
+    if (fileQueue.length === 0) {
+        elements.queueEmpty.style.display = 'flex';
+        elements.queueList.style.display = 'none';
+        elements.queueStatus.style.display = 'none';
+    } else {
+        elements.queueEmpty.style.display = 'none';
+        elements.queueList.style.display = 'block';
+        elements.queueStatus.style.display = 'flex';
+        
+        // 更新统计信息
+        const pendingCount = fileQueue.filter(item => item.status === 'pending').length;
+        const completedCount = fileQueue.filter(item => item.status === 'completed').length;
+        const errorCount = fileQueue.filter(item => item.status === 'error').length;
+        
+        elements.pendingCount.textContent = pendingCount;
+        elements.completedCount.textContent = completedCount;
+        elements.errorCount.textContent = errorCount;
+        
+        // 渲染队列列表
+        renderQueueList();
+    }
     
-    // 清除之前的日志
-    clearLog();
+    updateProcessingButtonState();
+}
+
+// 渲染队列列表
+function renderQueueList() {
+    elements.queueList.innerHTML = '';
+    
+    fileQueue.forEach(item => {
+        const queueItemElement = createQueueItemElement(item);
+        elements.queueList.appendChild(queueItemElement);
+    });
+}
+
+// 创建队列项元素
+function createQueueItemElement(item) {
+    const div = document.createElement('div');
+    div.className = `queue-item ${item.status}`;
+    div.setAttribute('data-file-id', item.id);
+    
+    const statusText = {
+        pending: '等待中',
+        processing: '处理中',
+        completed: '已完成',
+        error: '出错'
+    };
+    
+    div.innerHTML = `
+        <div class="queue-item-info">
+            <div class="queue-item-name" title="${item.filePath}">${item.fileName}</div>
+            <div class="queue-item-status">
+                <span class="status-badge ${item.status}">${statusText[item.status]}</span>
+                <span class="queue-item-time">${new Date(item.addedAt).toLocaleTimeString()}</span>
+                ${item.status === 'processing' ? `
+                    <div class="queue-item-progress">
+                        <div class="progress-bar" style="width: ${item.progress}%"></div>
+                    </div>
+                ` : ''}
+            </div>
+            ${item.error ? `<div class="queue-item-error">错误: ${item.error}</div>` : ''}
+        </div>
+        <div class="queue-item-actions">
+            ${item.status === 'completed' && item.outputPath ? `
+                <button class="btn btn-view" onclick="openFileOutput('${item.outputPath}')">查看结果</button>
+            ` : ''}
+            ${item.status !== 'processing' ? `
+                <button class="btn btn-remove" onclick="removeFromQueue('${item.id}')">删除</button>
+            ` : ''}
+        </div>
+    `;
+    
+    return div;
+}
+
+// 更新文件进度
+function updateFileProgress(fileId, progress) {
+    const queueItem = document.querySelector(`[data-file-id="${fileId}"]`);
+    if (queueItem) {
+        const progressBar = queueItem.querySelector('.progress-bar');
+        if (progressBar) {
+            progressBar.style.width = `${progress}%`;
+        }
+    }
+}
+
+// 从队列中删除文件
+async function removeFromQueue(fileId) {
+    try {
+        const result = await window.electronAPI.removeFromQueue(fileId);
+        if (result.success) {
+            appendLog('文件已从队列中删除', 'info');
+        } else {
+            appendLog(`删除失败: ${result.message}`, 'error');
+        }
+    } catch (error) {
+        appendLog(`删除文件失败: ${error.message}`, 'error');
+    }
+}
+
+// 清空队列
+async function clearQueue() {
+    if (isProcessing) {
+        appendLog('正在处理中，无法清空队列', 'error');
+        return;
+    }
+    
+    try {
+        const result = await window.electronAPI.clearQueue();
+        if (result.success) {
+            appendLog('队列已清空', 'info');
+        } else {
+            appendLog(`清空队列失败: ${result.message}`, 'error');
+        }
+    } catch (error) {
+        appendLog(`清空队列失败: ${error.message}`, 'error');
+    }
+}
+
+// 开始队列处理
+async function startQueueProcessing() {
+    if (isProcessing) return;
+    
+    const outputPath = elements.outputPath.value.trim();
+    if (!outputPath) {
+        appendLog('请先选择输出目录', 'error');
+        return;
+    }
+    
+    const pendingFiles = fileQueue.filter(item => item.status === 'pending');
+    if (pendingFiles.length === 0) {
+        appendLog('没有待处理的文件', 'error');
+        return;
+    }
     
     // 收集参数
     const options = {
-        inputPath: elements.inputPath.value.split(', ')[0], // 如果是多个文件，暂时只处理第一个
-        outputPath: elements.outputPath.value,
+        outputPath: outputPath,
         method: elements.method.value,
         backend: elements.backend.value,
         lang: elements.lang.value,
@@ -195,46 +373,69 @@ async function executeMinerU() {
         source: elements.source.value
     };
     
-    appendLog('开始执行 MinerU...', 'info');
-    appendLog(`输入文件: ${options.inputPath}`, 'info');
-    appendLog(`输出目录: ${options.outputPath}`, 'info');
-    appendLog(`解析方法: ${options.method}`, 'info');
-    appendLog(`后端: ${options.backend}`, 'info');
-    appendLog('-------------------', 'info');
-    
     try {
-        const result = await window.electronAPI.executeMinerU(options);
+        isProcessing = true;
+        clearLog();
+        appendLog(`开始批量处理 ${pendingFiles.length} 个文件...`, 'info');
+        appendLog('-------------------', 'info');
         
+        const result = await window.electronAPI.startQueueProcessing(options);
         if (result.success) {
-            appendLog('-------------------', 'success');
-            appendLog('✅ 执行完成！', 'success');
-            elements.openOutputFolderBtn.disabled = false;
+            updateProcessingButtonsDisplay();
+            updateProcessingStatus();
         } else {
-            appendLog('-------------------', 'error');
-            appendLog(`❌ 执行失败: ${result.error}`, 'error');
+            isProcessing = false;
+            appendLog(`启动失败: ${result.message}`, 'error');
         }
     } catch (error) {
-        appendLog('-------------------', 'error');
-        appendLog(`❌ 执行出错: ${error.error || error.message}`, 'error');
-        
-        if (error.stderr) {
-            appendLog('错误详情:', 'error');
-            appendLog(error.stderr, 'stderr');
-        }
-    } finally {
-        isExecuting = false;
-        elements.loadingOverlay.style.display = 'none';
-        updateExecuteButtonState();
+        isProcessing = false;
+        appendLog(`启动批量处理失败: ${error.message}`, 'error');
     }
 }
 
-// 取消执行
-function cancelExecution() {
-    // 注意：这里只是隐藏加载遮罩，实际的进程取消需要在主进程中实现
-    isExecuting = false;
-    elements.loadingOverlay.style.display = 'none';
-    updateExecuteButtonState();
-    appendLog('用户取消了执行', 'info');
+// 停止队列处理
+async function stopQueueProcessing() {
+    try {
+        await window.electronAPI.stopQueueProcessing();
+        appendLog('正在停止处理...', 'info');
+    } catch (error) {
+        appendLog(`停止处理失败: ${error.message}`, 'error');
+    }
+}
+
+// 更新处理按钮状态
+function updateProcessingButtonState() {
+    const hasOutput = elements.outputPath.value.trim() !== '';
+    const hasPendingFiles = fileQueue.filter(item => item.status === 'pending').length > 0;
+    const statusConnected = elements.statusIndicator.querySelector('.status-dot').classList.contains('connected');
+    
+    elements.startProcessingBtn.disabled = !hasOutput || !hasPendingFiles || !statusConnected || isProcessing;
+}
+
+// 更新处理按钮显示
+function updateProcessingButtonsDisplay() {
+    if (isProcessing) {
+        elements.startProcessingBtn.style.display = 'none';
+        elements.stopProcessingBtn.style.display = 'inline-flex';
+    } else {
+        elements.startProcessingBtn.style.display = 'inline-flex';
+        elements.stopProcessingBtn.style.display = 'none';
+    }
+}
+
+// 更新处理状态
+async function updateProcessingStatus() {
+    try {
+        const status = await window.electronAPI.getProcessingStatus();
+        elements.currentProcessingFile.textContent = status.currentFile ? status.currentFile.fileName : '无';
+    } catch (error) {
+        console.error('获取处理状态失败:', error);
+    }
+}
+
+// 打开文件输出目录
+function openFileOutput(outputPath) {
+    window.electronAPI.openOutputFolder(outputPath);
 }
 
 // 保存设置
@@ -283,17 +484,15 @@ async function loadSettings() {
     }
 }
 
-// 添加日志
-function appendLog(message, type = 'stdout') {
-    const logLine = document.createElement('div');
-    logLine.className = `log-line log-${type}`;
-    
-    // 添加时间戳
-    const timestamp = new Date().toLocaleTimeString();
-    logLine.textContent = `[${timestamp}] ${message}`;
-    
-    elements.logOutput.appendChild(logLine);
-    elements.logOutput.scrollTop = elements.logOutput.scrollHeight;
+// 处理后端变化
+function handleBackendChange() {
+    const urlGroup = elements.url.closest('.input-group');
+    if (elements.backend.value === 'vlm-sglang-client') {
+        urlGroup.style.display = 'flex';
+    } else {
+        urlGroup.style.display = 'none';
+        elements.url.value = '';
+    }
 }
 
 // 清除日志
@@ -318,7 +517,6 @@ async function installConda() {
     const originalText = installBtn.textContent;
     
     try {
-        // 禁用按钮并显示安装中状态
         installBtn.disabled = true;
         installBtn.textContent = '安装中...';
         
@@ -330,7 +528,6 @@ async function installConda() {
             appendLog('Conda 安装成功！正在重新检查 MinerU 状态...', 'success');
             installBtn.style.display = 'none';
             
-            // 等待一下再重新检查状态
             setTimeout(async () => {
                 await checkMinerUStatus();
             }, 2000);
@@ -363,6 +560,18 @@ function handleCondaInstallProgress(data) {
         default:
             appendLog(message, 'info');
     }
+}
+
+// 添加日志
+function appendLog(message, type = 'stdout') {
+    const logLine = document.createElement('div');
+    logLine.className = `log-line log-${type}`;
+    
+    const timestamp = new Date().toLocaleTimeString();
+    logLine.textContent = `[${timestamp}] ${message}`;
+    
+    elements.logOutput.appendChild(logLine);
+    elements.logOutput.scrollTop = elements.logOutput.scrollHeight;
 }
 
 // 应用启动时初始化

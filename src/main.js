@@ -8,6 +8,12 @@ const os = require('os');
 // 创建配置存储
 const store = new Store();
 
+// 添加队列管理状态
+let fileQueue = [];
+let isProcessing = false;
+let currentProcessingFile = null;
+let shouldStop = false;
+
 // 辅助函数：获取conda的路径
 function getCondaPath() {
   // 获取常见的conda安装路径
@@ -226,10 +232,10 @@ app.on('activate', () => {
 
 // IPC 处理程序
 
-// 选择输入文件/文件夹
+// 选择输入文件/文件夹 - 修改为添加到队列
 ipcMain.handle('select-input-path', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
-    properties: ['openFile', 'openDirectory', 'multiSelections'],
+    properties: ['openFile', 'multiSelections'],
     filters: [
       { name: 'PDF Files', extensions: ['pdf'] },
       { name: 'Image Files', extensions: ['png', 'jpg', 'jpeg'] },
@@ -238,7 +244,24 @@ ipcMain.handle('select-input-path', async () => {
   });
 
   if (!result.canceled) {
-    return result.filePaths;
+    // 为每个文件创建队列项
+    const newItems = result.filePaths.map(filePath => ({
+      id: Date.now() + Math.random(),
+      filePath,
+      fileName: path.basename(filePath),
+      status: 'pending', // pending, processing, completed, error
+      progress: 0,
+      output: '',
+      error: null,
+      addedAt: new Date().toISOString()
+    }));
+    
+    fileQueue.push(...newItems);
+    
+    // 通知渲染进程队列已更新
+    mainWindow.webContents.send('queue-updated', fileQueue);
+    
+    return newItems;
   }
   return null;
 });
@@ -255,8 +278,156 @@ ipcMain.handle('select-output-path', async () => {
   return null;
 });
 
-// 执行 MinerU 命令
-ipcMain.handle('execute-mineru', async (event, options) => {
+// 获取文件队列
+ipcMain.handle('get-file-queue', async () => {
+  return fileQueue;
+});
+
+// 从队列中删除文件
+ipcMain.handle('remove-from-queue', async (event, fileId) => {
+  const index = fileQueue.findIndex(item => item.id === fileId);
+  if (index !== -1) {
+    // 如果正在处理这个文件，不允许删除
+    if (fileQueue[index].status === 'processing') {
+      return { success: false, message: '正在处理的文件无法删除' };
+    }
+    
+    fileQueue.splice(index, 1);
+    mainWindow.webContents.send('queue-updated', fileQueue);
+    return { success: true };
+  }
+  return { success: false, message: '文件不存在' };
+});
+
+// 清空队列
+ipcMain.handle('clear-queue', async () => {
+  if (isProcessing) {
+    return { success: false, message: '正在处理中，无法清空队列' };
+  }
+  
+  fileQueue = [];
+  mainWindow.webContents.send('queue-updated', fileQueue);
+  return { success: true };
+});
+
+// 开始批量处理队列
+ipcMain.handle('start-queue-processing', async (event, options) => {
+  if (isProcessing) {
+    return { success: false, message: '已在处理中' };
+  }
+  
+  const pendingFiles = fileQueue.filter(item => item.status === 'pending');
+  if (pendingFiles.length === 0) {
+    return { success: false, message: '没有待处理的文件' };
+  }
+  
+  isProcessing = true;
+  shouldStop = false;
+  
+  // 开始处理队列
+  processQueue(options);
+  
+  return { success: true, message: `开始处理 ${pendingFiles.length} 个文件` };
+});
+
+// 停止队列处理
+ipcMain.handle('stop-queue-processing', async () => {
+  shouldStop = true;
+  if (currentProcessingFile) {
+    // 这里可以添加取消当前处理的逻辑
+    const fileIndex = fileQueue.findIndex(item => item.id === currentProcessingFile.id);
+    if (fileIndex !== -1) {
+      fileQueue[fileIndex].status = 'pending';
+      fileQueue[fileIndex].progress = 0;
+    }
+  }
+  isProcessing = false;
+  currentProcessingFile = null;
+  
+  mainWindow.webContents.send('queue-updated', fileQueue);
+  mainWindow.webContents.send('processing-stopped');
+  
+  return { success: true };
+});
+
+// 获取处理状态
+ipcMain.handle('get-processing-status', async () => {
+  return {
+    isProcessing,
+    currentFile: currentProcessingFile,
+    queueLength: fileQueue.length,
+    pendingCount: fileQueue.filter(item => item.status === 'pending').length,
+    completedCount: fileQueue.filter(item => item.status === 'completed').length,
+    errorCount: fileQueue.filter(item => item.status === 'error').length
+  };
+});
+
+// 队列处理函数
+async function processQueue(options) {
+  while (!shouldStop && isProcessing) {
+    const nextFile = fileQueue.find(item => item.status === 'pending');
+    
+    if (!nextFile) {
+      // 没有更多待处理文件
+      break;
+    }
+    
+    currentProcessingFile = nextFile;
+    nextFile.status = 'processing';
+    nextFile.progress = 0;
+    
+    mainWindow.webContents.send('queue-updated', fileQueue);
+    mainWindow.webContents.send('file-processing-started', nextFile);
+    
+    try {
+      // 为每个文件创建单独的输出目录
+      const outputDir = options.outputPath;
+      const fileOutputDir = path.join(outputDir, path.parse(nextFile.fileName).name);
+      
+      // 确保输出目录存在
+      if (!fs.existsSync(fileOutputDir)) {
+        fs.mkdirSync(fileOutputDir, { recursive: true });
+      }
+      
+      const fileOptions = {
+        ...options,
+        inputPath: nextFile.filePath,
+        outputPath: fileOutputDir
+      };
+      
+      const result = await processSingleFile(fileOptions, nextFile);
+      
+      if (result.success) {
+        nextFile.status = 'completed';
+        nextFile.progress = 100;
+        nextFile.output = result.stdout;
+        nextFile.outputPath = fileOutputDir;
+      } else {
+        nextFile.status = 'error';
+        nextFile.error = result.error || result.stderr;
+      }
+      
+    } catch (error) {
+      nextFile.status = 'error';
+      nextFile.error = error.message;
+    }
+    
+    mainWindow.webContents.send('queue-updated', fileQueue);
+    mainWindow.webContents.send('file-processing-completed', nextFile);
+    
+    currentProcessingFile = null;
+    
+    // 短暂延迟，避免过快处理
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+  
+  isProcessing = false;
+  currentProcessingFile = null;
+  mainWindow.webContents.send('queue-processing-finished');
+}
+
+// 处理单个文件的函数
+function processSingleFile(options, fileItem) {
   return new Promise((resolve, reject) => {
     const { inputPath, outputPath, method, backend, lang, url, start, end, formula, table, device, vram, source } = options;
     
@@ -309,26 +480,24 @@ ipcMain.handle('execute-mineru', async (event, options) => {
     if (source && source !== 'huggingface') {
       args.push('--source', source);
     }
-    
 
-    // 步骤 2: 构建最终要传递给 spawn 的命令和参数
     const condaInfo = getCondaPath();
     const env = getExtendedEnv();
     
-    // 我们要传递给 'conda' 的参数是 'run -n <环境名> <要执行的命令> ...<命令的参数>'
     const finalArgs = [
       'run',
       '-n',
-      'MinerU', // 你的 Conda 环境名称
-      'mineru', // 要在环境中执行的命令
-      ...args // 使用展开语法 (...) 将所有 mineru 的参数附加在后面
+      'MinerU',
+      'mineru',
+      ...args
     ];
-    console.log('Executing command:', condaInfo.path, finalArgs.join(' '));
-    // 步骤 3: 使用 spawn 执行命令
+    
+    console.log('Processing file:', fileItem.fileName, 'with command:', condaInfo.path, finalArgs.join(' '));
+    
     const child = spawn(condaInfo.path, finalArgs, {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: env,
-      shell: true
+      shell: false
     });
 
     let stdout = '';
@@ -337,15 +506,30 @@ ipcMain.handle('execute-mineru', async (event, options) => {
     child.stdout.on('data', (data) => {
       const output = data.toString();
       stdout += output;
-      // 实时发送输出到渲染进程
-      event.sender.send('mineru-output', { type: 'stdout', data: output });
+      
+      // 更新文件处理进度（可以根据输出内容估算进度）
+      updateFileProgress(fileItem, output);
+      
+      // 发送实时输出，包含文件信息
+      mainWindow.webContents.send('mineru-output', { 
+        type: 'stdout', 
+        data: output,
+        fileId: fileItem.id,
+        fileName: fileItem.fileName
+      });
     });
 
     child.stderr.on('data', (data) => {
       const output = data.toString();
       stderr += output;
-      // 实时发送错误输出到渲染进程
-      event.sender.send('mineru-output', { type: 'stderr', data: output });
+      
+      // 发送实时错误输出
+      mainWindow.webContents.send('mineru-output', { 
+        type: 'stderr', 
+        data: output,
+        fileId: fileItem.id,
+        fileName: fileItem.fileName
+      });
     });
 
     child.on('close', (code) => {
@@ -376,6 +560,36 @@ ipcMain.handle('execute-mineru', async (event, options) => {
       });
     });
   });
+}
+
+// 更新文件处理进度
+function updateFileProgress(fileItem, output) {
+  // 简单的进度估算逻辑，可以根据实际输出内容优化
+  if (output.includes('Processing')) {
+    fileItem.progress = Math.min(fileItem.progress + 10, 90);
+  } else if (output.includes('Completed') || output.includes('Done')) {
+    fileItem.progress = 100;
+  }
+  
+  // 通知渲染进程更新进度
+  mainWindow.webContents.send('file-progress-updated', {
+    fileId: fileItem.id,
+    progress: fileItem.progress
+  });
+}
+
+// 修改原有的执行函数，保持向后兼容
+ipcMain.handle('execute-mineru', async (event, options) => {
+  // 如果队列为空或只有一个文件，使用原有逻辑
+  if (fileQueue.length <= 1) {
+    return processSingleFile(options, { id: 'single', fileName: 'single-file' });
+  } else {
+    // 否则提示使用队列处理
+    return {
+      success: false,
+      error: '请使用队列处理功能来处理多个文件'
+    };
+  }
 });
 
 // 保存设置

@@ -6,9 +6,27 @@ contextBridge.exposeInMainWorld('electronAPI', {
   selectInputPath: () => ipcRenderer.invoke('select-input-path'),
   selectOutputPath: () => ipcRenderer.invoke('select-output-path'),
   
+  // 队列管理
+  getFileQueue: () => ipcRenderer.invoke('get-file-queue'),
+  removeFromQueue: (fileId) => ipcRenderer.invoke('remove-from-queue', fileId),
+  clearQueue: () => ipcRenderer.invoke('clear-queue'),
+  
+  // 批量处理
+  startQueueProcessing: (options) => ipcRenderer.invoke('start-queue-processing', options),
+  stopQueueProcessing: () => ipcRenderer.invoke('stop-queue-processing'),
+  getProcessingStatus: () => ipcRenderer.invoke('get-processing-status'),
+  
   // MinerU 执行
   executeMinerU: (options) => ipcRenderer.invoke('execute-mineru', options),
   onMinerUOutput: (callback) => ipcRenderer.on('mineru-output', callback),
+  
+  // 队列事件监听
+  onQueueUpdated: (callback) => ipcRenderer.on('queue-updated', callback),
+  onFileProcessingStarted: (callback) => ipcRenderer.on('file-processing-started', callback),
+  onFileProcessingCompleted: (callback) => ipcRenderer.on('file-processing-completed', callback),
+  onFileProgressUpdated: (callback) => ipcRenderer.on('file-progress-updated', callback),
+  onQueueProcessingFinished: (callback) => ipcRenderer.on('queue-processing-finished', callback),
+  onProcessingStopped: (callback) => ipcRenderer.on('processing-stopped', callback),
   
   // 设置管理
   saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings),
