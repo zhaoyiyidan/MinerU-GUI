@@ -235,7 +235,7 @@ ipcMain.handle('check-mineru-installed', async () => {
     // 命令: conda
     // 参数: ['run', '-n', 'MinerU', 'mineru', '--version']
     // 这相当于在终端执行 `conda run -n MinerU mineru --version`
-    const child = spawn('conda', ['run', '-n', 'MinerU', 'mineru', '--version'], {
+    const child = spawn('conda', ['run', '-n', 'MinerU', 'mineru', '-v'], {
       stdio: 'pipe',
       // 在某些系统上，特别是Windows，可能需要shell:true
       // 但最好先在没有它的情况下尝试
