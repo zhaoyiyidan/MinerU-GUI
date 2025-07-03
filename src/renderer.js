@@ -39,6 +39,7 @@ const elements = {
     clearLogBtn: document.getElementById('clearLogBtn'),
     openOutputFolderBtn: document.getElementById('openOutputFolderBtn'),
     installCondaBtn: document.getElementById('installCondaBtn'),
+    installMinerUBtn: document.getElementById('installMinerUBtn'),
     
     // 状态和日志
     statusIndicator: document.getElementById('statusIndicator'),
@@ -73,6 +74,7 @@ async function checkMinerUStatus() {
     const statusDot = elements.statusIndicator.querySelector('.status-dot');
     const statusText = elements.statusIndicator.querySelector('.status-text');
     const installCondaBtn = elements.installCondaBtn;
+    const installMinerUBtn = elements.installMinerUBtn;
     
     try {
         const result = await window.electronAPI.checkMinerUInstalled();
@@ -81,17 +83,27 @@ async function checkMinerUStatus() {
             statusDot.className = 'status-dot connected';
             statusText.textContent = 'MinerU 已就绪';
             installCondaBtn.style.display = 'none';
+            installMinerUBtn.style.display = 'none';
             updateProcessingButtonState();
         } else if (result.needsCondaInstall) {
             statusDot.className = 'status-dot error';
             statusText.textContent = 'Conda 未安装';
             installCondaBtn.style.display = 'block';
+            installMinerUBtn.style.display = 'none';
             elements.startProcessingBtn.disabled = true;
             appendLog('错误: 未检测到 Conda 安装。请先安装 Conda。', 'error');
+        } else if (result.needsMinerUInstall) {
+            statusDot.className = 'status-dot error';
+            statusText.textContent = 'MinerU 未安装';
+            installCondaBtn.style.display = 'none';
+            installMinerUBtn.style.display = 'block';
+            elements.startProcessingBtn.disabled = true;
+            appendLog('错误: 未检测到 MinerU 安装。请先安装 MinerU。', 'error');
         } else {
             statusDot.className = 'status-dot error';
             statusText.textContent = 'MinerU 未安装';
             installCondaBtn.style.display = 'none';
+            installMinerUBtn.style.display = 'none';
             elements.startProcessingBtn.disabled = true;
             appendLog('错误: 未检测到 MinerU 安装。请先安装 MinerU。', 'error');
         }
@@ -99,6 +111,7 @@ async function checkMinerUStatus() {
         statusDot.className = 'status-dot error';
         statusText.textContent = '状态检查失败';
         installCondaBtn.style.display = 'none';
+        installMinerUBtn.style.display = 'none';
         elements.startProcessingBtn.disabled = true;
         appendLog(`状态检查失败: ${error.message}`, 'error');
     }
@@ -121,6 +134,7 @@ function bindEventListeners() {
     elements.clearLogBtn.addEventListener('click', clearLog);
     elements.openOutputFolderBtn.addEventListener('click', openOutputFolder);
     elements.installCondaBtn.addEventListener('click', installConda);
+    elements.installMinerUBtn.addEventListener('click', installMinerU);
     
     // 输入变化监听
     elements.outputPath.addEventListener('change', updateProcessingButtonState);
@@ -131,6 +145,11 @@ function bindEventListeners() {
     // Conda 安装进度监听
     window.electronAPI.onCondaInstallProgress((event, data) => {
         handleCondaInstallProgress(data);
+    });
+    
+    // MinerU 安装进度监听
+    window.electronAPI.onMinerUInstallProgress((event, data) => {
+        handleMinerUInstallProgress(data);
     });
 }
 
@@ -543,6 +562,38 @@ async function installConda() {
     }
 }
 
+// 安装 MinerU
+async function installMinerU() {
+    const installBtn = elements.installMinerUBtn;
+    const originalText = installBtn.textContent;
+    
+    try {
+        installBtn.disabled = true;
+        installBtn.textContent = '安装中...';
+        
+        appendLog('开始安装 MinerU...', 'info');
+        
+        const result = await window.electronAPI.installMinerU();
+        
+        if (result.success) {
+            appendLog('MinerU 安装成功！正在重新检查状态...', 'success');
+            installBtn.style.display = 'none';
+            
+            setTimeout(async () => {
+                await checkMinerUStatus();
+            }, 2000);
+        } else {
+            appendLog(`MinerU 安装失败: ${result.error}`, 'error');
+            installBtn.disabled = false;
+            installBtn.textContent = originalText;
+        }
+    } catch (error) {
+        appendLog(`MinerU 安装出错: ${error.message}`, 'error');
+        installBtn.disabled = false;
+        installBtn.textContent = originalText;
+    }
+}
+
 // 处理 Conda 安装进度
 function handleCondaInstallProgress(data) {
     const { type, message } = data;
@@ -556,6 +607,31 @@ function handleCondaInstallProgress(data) {
             break;
         case 'error':
             appendLog(message, 'error');
+            break;
+        default:
+            appendLog(message, 'info');
+    }
+}
+
+// 处理 MinerU 安装进度
+function handleMinerUInstallProgress(data) {
+    const { type, message } = data;
+    
+    switch (type) {
+        case 'info':
+            appendLog(message, 'info');
+            break;
+        case 'success':
+            appendLog(message, 'success');
+            break;
+        case 'error':
+            appendLog(message, 'error');
+            break;
+        case 'stdout':
+            appendLog(message, 'stdout');
+            break;
+        case 'stderr':
+            appendLog(message, 'stderr');
             break;
         default:
             appendLog(message, 'info');

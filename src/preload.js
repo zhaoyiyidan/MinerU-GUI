@@ -39,5 +39,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Conda 管理
   checkCondaExists: () => ipcRenderer.invoke('check-conda-exists'),
   installConda: () => ipcRenderer.invoke('install-conda'),
-  onCondaInstallProgress: (callback) => ipcRenderer.on('conda-install-progress', callback)
+  onCondaInstallProgress: (callback) => ipcRenderer.on('conda-install-progress', callback),
+  
+  // MinerU 管理
+  installMinerU: () => ipcRenderer.invoke('install-mineru'),
+  onMinerUInstallProgress: (callback) => ipcRenderer.on('mineru-install-progress', callback)
 });

@@ -629,47 +629,90 @@ ipcMain.handle('check-mineru-installed', async () => {
         installed: false, 
         condaFound: false, 
         needsCondaInstall: true,
+        needsMinerUInstall: false,
         message: 'Conda not found. Please install conda first.' 
       });
       return;
     }
     
-    // 使用 'conda run' 在指定环境中执行命令
-    const child = spawn(condaInfo.path, ['run', '-n', 'MinerU', 'mineru', '--version'], {
+    // 首先检查 MinerU 环境是否存在
+    const envChild = spawn(condaInfo.path, ['env', 'list'], {
       stdio: 'pipe',
       shell: true,
       env: env
     });
     
-    let stdout = '';
-    let stderr = '';
+    let envOutput = '';
     
-    child.stdout.on('data', (data) => {
-      stdout += data.toString();
+    envChild.stdout.on('data', (data) => {
+      envOutput += data.toString();
     });
     
-    child.stderr.on('data', (data) => {
-      stderr += data.toString();
-    });
-    
-    child.on('close', (code) => {
-      console.log('check-mineru-installed result:', { code, stdout, stderr });
-      resolve({ 
-        installed: code === 0, 
-        condaFound: true, 
-        needsCondaInstall: false,
-        stdout, 
-        stderr 
+    envChild.on('close', (envCode) => {
+      const hasMinerUEnv = envOutput.includes('MinerU');
+      
+      if (!hasMinerUEnv) {
+        resolve({ 
+          installed: false, 
+          condaFound: true, 
+          needsCondaInstall: false,
+          needsMinerUInstall: true,
+          message: 'MinerU environment not found. Please install MinerU.' 
+        });
+        return;
+      }
+      
+      // 如果环境存在，检查 MinerU 是否可用
+      const child = spawn(condaInfo.path, ['run', '-n', 'MinerU', 'mineru', '--version'], {
+        stdio: 'pipe',
+        shell: true,
+        env: env
       });
-    });
+      
+      let stdout = '';
+      let stderr = '';
+      
+      child.stdout.on('data', (data) => {
+        stdout += data.toString();
+      });
+      
+      child.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+      
+      child.on('close', (code) => {
+        console.log('check-mineru-installed result:', { code, stdout, stderr });
+        if (code === 0) {
+          resolve({ 
+            installed: true, 
+            condaFound: true, 
+            needsCondaInstall: false,
+            needsMinerUInstall: false,
+            stdout, 
+            stderr 
+          });
+        } else {
+          resolve({ 
+            installed: false, 
+            condaFound: true, 
+            needsCondaInstall: false,
+            needsMinerUInstall: true,
+            message: 'MinerU is not working properly. Please reinstall MinerU.',
+            stdout, 
+            stderr 
+          });
+        }
+      });
 
-    child.on('error', (error) => {
-      console.log('check-mineru-installed error:', error.message);
-      resolve({ 
-        installed: false, 
-        condaFound: true, 
-        needsCondaInstall: false,
-        error: error.message 
+      child.on('error', (error) => {
+        console.log('check-mineru-installed error:', error.message);
+        resolve({ 
+          installed: false, 
+          condaFound: true, 
+          needsCondaInstall: false,
+          needsMinerUInstall: true,
+          error: error.message 
+        });
       });
     });
   });
@@ -696,6 +739,145 @@ ipcMain.handle('install-conda', async (event) => {
     console.error('Conda installation failed:', error);
     
     event.sender.send('conda-install-progress', { 
+      type: 'error', 
+      message: `Installation failed: ${error.message}` 
+    });
+    
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+});
+
+// 辅助函数：安装 MinerU
+async function installMinerU() {
+  return new Promise((resolve, reject) => {
+    const condaInfo = getCondaPath();
+    const env = getExtendedEnv();
+    
+    console.log('Starting MinerU installation...');
+    
+    // 按照 install.md 中的步骤安装 MinerU
+    const steps = [
+      // 1. 创建 conda 环境
+      { 
+        command: [condaInfo.path, 'create', '-n', 'MinerU', 'python=3.12', '-y'],
+        description: '创建 MinerU conda 环境'
+      },
+      // 2. 激活环境并升级 pip
+      {
+        command: [condaInfo.path, 'run', '-n', 'MinerU', 'pip', 'install', '--upgrade', 'pip'],
+        description: '升级 pip'
+      },
+      // 3. 安装 uv
+      {
+        command: [condaInfo.path, 'run', '-n', 'MinerU', 'pip', 'install', 'uv'],
+        description: '安装 uv 包管理器'
+      },
+      // 4. 使用 uv 安装 MinerU
+      {
+        command: [condaInfo.path, 'run', '-n', 'MinerU', 'uv', 'pip', 'install', '-U', 'mineru[core]'],
+        description: '安装 MinerU'
+      }
+    ];
+    
+    let currentStep = 0;
+    
+    function executeStep() {
+      if (currentStep >= steps.length) {
+        resolve({
+          success: true,
+          message: 'MinerU installation completed successfully'
+        });
+        return;
+      }
+      
+      const step = steps[currentStep];
+      console.log(`Executing step ${currentStep + 1}: ${step.description}`);
+      
+      // 发送进度更新
+      if (mainWindow) {
+        mainWindow.webContents.send('mineru-install-progress', {
+          type: 'info',
+          message: `步骤 ${currentStep + 1}/${steps.length}: ${step.description}...`
+        });
+      }
+      
+      const child = spawn(step.command[0], step.command.slice(1), {
+        stdio: 'pipe',
+        shell: true,
+        env: env
+      });
+      
+      let stdout = '';
+      let stderr = '';
+      
+      child.stdout.on('data', (data) => {
+        const output = data.toString();
+        stdout += output;
+        console.log('MinerU install stdout:', output);
+        
+        if (mainWindow) {
+          mainWindow.webContents.send('mineru-install-progress', {
+            type: 'stdout',
+            message: output
+          });
+        }
+      });
+      
+      child.stderr.on('data', (data) => {
+        const output = data.toString();
+        stderr += output;
+        console.log('MinerU install stderr:', output);
+        
+        if (mainWindow) {
+          mainWindow.webContents.send('mineru-install-progress', {
+            type: 'stderr',
+            message: output
+          });
+        }
+      });
+      
+      child.on('close', (code) => {
+        if (code === 0) {
+          currentStep++;
+          setTimeout(executeStep, 1000); // 短暂延迟后执行下一步
+        } else {
+          reject(new Error(`Step "${step.description}" failed with exit code: ${code}. Stderr: ${stderr}`));
+        }
+      });
+      
+      child.on('error', (error) => {
+        reject(new Error(`Step "${step.description}" error: ${error.message}`));
+      });
+    }
+    
+    executeStep();
+  });
+}
+
+// 安装 MinerU
+ipcMain.handle('install-mineru', async (event) => {
+  try {
+    console.log('Starting MinerU installation process...');
+    event.sender.send('mineru-install-progress', { 
+      type: 'info', 
+      message: 'Starting MinerU installation...' 
+    });
+    
+    const result = await installMinerU();
+    
+    event.sender.send('mineru-install-progress', { 
+      type: 'success', 
+      message: 'MinerU installation completed successfully!' 
+    });
+    
+    return result;
+  } catch (error) {
+    console.error('MinerU installation failed:', error);
+    
+    event.sender.send('mineru-install-progress', { 
       type: 'error', 
       message: `Installation failed: ${error.message}` 
     });
