@@ -26,6 +26,7 @@ const elements = {
     clearLogBtn: document.getElementById('clearLogBtn'),
     openOutputFolderBtn: document.getElementById('openOutputFolderBtn'),
     cancelBtn: document.getElementById('cancelBtn'),
+    installCondaBtn: document.getElementById('installCondaBtn'),
     
     // 状态和日志
     statusIndicator: document.getElementById('statusIndicator'),
@@ -58,23 +59,33 @@ async function initializeApp() {
 async function checkMinerUStatus() {
     const statusDot = elements.statusIndicator.querySelector('.status-dot');
     const statusText = elements.statusIndicator.querySelector('.status-text');
+    const installCondaBtn = elements.installCondaBtn;
     
     try {
-        const isInstalled = await window.electronAPI.checkMinerUInstalled();
+        const result = await window.electronAPI.checkMinerUInstalled();
         
-        if (isInstalled) {
+        if (result.installed) {
             statusDot.className = 'status-dot connected';
             statusText.textContent = 'MinerU 已就绪';
+            installCondaBtn.style.display = 'none';
             updateExecuteButtonState();
+        } else if (result.needsCondaInstall) {
+            statusDot.className = 'status-dot error';
+            statusText.textContent = 'Conda 未安装';
+            installCondaBtn.style.display = 'block';
+            elements.executeBtn.disabled = true;
+            appendLog('错误: 未检测到 Conda 安装。请先安装 Conda。', 'error');
         } else {
             statusDot.className = 'status-dot error';
             statusText.textContent = 'MinerU 未安装';
+            installCondaBtn.style.display = 'none';
             elements.executeBtn.disabled = true;
             appendLog('错误: 未检测到 MinerU 安装。请先安装 MinerU。', 'error');
         }
     } catch (error) {
         statusDot.className = 'status-dot error';
         statusText.textContent = '状态检查失败';
+        installCondaBtn.style.display = 'none';
         elements.executeBtn.disabled = true;
         appendLog(`状态检查失败: ${error.message}`, 'error');
     }
@@ -93,6 +104,7 @@ function bindEventListeners() {
     elements.clearLogBtn.addEventListener('click', clearLog);
     elements.openOutputFolderBtn.addEventListener('click', openOutputFolder);
     elements.cancelBtn.addEventListener('click', cancelExecution);
+    elements.installCondaBtn.addEventListener('click', installConda);
     
     // 输入变化监听
     elements.inputPath.addEventListener('change', updateExecuteButtonState);
@@ -100,6 +112,11 @@ function bindEventListeners() {
     
     // 后端变化监听（显示/隐藏 URL 输入）
     elements.backend.addEventListener('change', handleBackendChange);
+    
+    // Conda 安装进度监听
+    window.electronAPI.onCondaInstallProgress((event, data) => {
+        handleCondaInstallProgress(data);
+    });
 }
 
 // 选择输入路径
@@ -292,6 +309,59 @@ async function openOutputFolder() {
         } catch (error) {
             appendLog(`打开输出文件夹失败: ${error.message}`, 'error');
         }
+    }
+}
+
+// 安装 Conda
+async function installConda() {
+    const installBtn = elements.installCondaBtn;
+    const originalText = installBtn.textContent;
+    
+    try {
+        // 禁用按钮并显示安装中状态
+        installBtn.disabled = true;
+        installBtn.textContent = '安装中...';
+        
+        appendLog('开始安装 Conda...', 'info');
+        
+        const result = await window.electronAPI.installConda();
+        
+        if (result.success) {
+            appendLog('Conda 安装成功！正在重新检查 MinerU 状态...', 'success');
+            installBtn.style.display = 'none';
+            
+            // 等待一下再重新检查状态
+            setTimeout(async () => {
+                await checkMinerUStatus();
+            }, 2000);
+        } else {
+            appendLog(`Conda 安装失败: ${result.error}`, 'error');
+            installBtn.disabled = false;
+            installBtn.textContent = originalText;
+        }
+    } catch (error) {
+        appendLog(`Conda 安装出错: ${error.message}`, 'error');
+        installBtn.disabled = false;
+        installBtn.textContent = originalText;
+    }
+}
+
+// 处理 Conda 安装进度
+function handleCondaInstallProgress(data) {
+    const { type, message } = data;
+    
+    switch (type) {
+        case 'info':
+            appendLog(message, 'info');
+            break;
+        case 'success':
+            appendLog(message, 'success');
+            break;
+        case 'error':
+            appendLog(message, 'error');
+            break;
+        default:
+            appendLog(message, 'info');
     }
 }
 

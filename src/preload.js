@@ -16,5 +16,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // 工具函数
   openOutputFolder: (folderPath) => ipcRenderer.invoke('open-output-folder', folderPath),
-  checkMinerUInstalled: () => ipcRenderer.invoke('check-mineru-installed')
+  checkMinerUInstalled: () => ipcRenderer.invoke('check-mineru-installed'),
+  
+  // Conda 管理
+  checkCondaExists: () => ipcRenderer.invoke('check-conda-exists'),
+  installConda: () => ipcRenderer.invoke('install-conda'),
+  onCondaInstallProgress: (callback) => ipcRenderer.on('conda-install-progress', callback)
 });

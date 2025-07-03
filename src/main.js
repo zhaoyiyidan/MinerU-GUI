@@ -26,18 +26,143 @@ function getCondaPath() {
   
   // 尝试从环境变量中获取conda路径
   if (process.env.CONDA_EXE) {
-    return process.env.CONDA_EXE;
+    return { path: process.env.CONDA_EXE, found: true };
   }
   
   // 尝试找到conda的实际路径
   for (const path of possibleCondaPaths) {
     if (fs.existsSync(path)) {
-      return path;
+      return { path: path, found: true };
     }
   }
   
-  // 如果都找不到，返回默认的conda命令
-  return 'conda';
+  // 如果都找不到，返回默认的conda命令但标记为未找到
+  return { path: 'conda', found: false };
+}
+
+// 辅助函数：安装conda
+async function installConda() {
+  return new Promise((resolve, reject) => {
+    const homeDir = os.homedir();
+    const platform = process.platform;
+    const arch = process.arch;
+    
+    let installerUrl, installerPath, installPath;
+    
+    // 根据平台和架构确定下载URL
+    if (platform === 'darwin') {
+      if (arch === 'arm64') {
+        installerUrl = 'https://repo.anaconda.com/miniconda/Miniconda3-latest-MacOSX-arm64.sh';
+        installerPath = `${homeDir}/Miniconda3-latest-MacOSX-arm64.sh`;
+      } else {
+        installerUrl = 'https://repo.anaconda.com/miniconda/Miniconda3-latest-MacOSX-x86_64.sh';
+        installerPath = `${homeDir}/Miniconda3-latest-MacOSX-x86_64.sh`;
+      }
+      installPath = `${homeDir}/miniconda3`;
+    } else if (platform === 'linux') {
+      if (arch === 'arm64' || arch === 'aarch64') {
+        installerUrl = 'https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-aarch64.sh';
+        installerPath = `${homeDir}/Miniconda3-latest-Linux-aarch64.sh`;
+      } else {
+        installerUrl = 'https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh';
+        installerPath = `${homeDir}/Miniconda3-latest-Linux-x86_64.sh`;
+      }
+      installPath = `${homeDir}/miniconda3`;
+    } else if (platform === 'win32') {
+      // Windows 需要不同的处理方式
+      reject(new Error('Windows平台的Conda安装暂未支持，请手动安装Miniconda'));
+      return;
+    } else {
+      reject(new Error(`不支持的平台: ${platform}`));
+      return;
+    }
+    
+    console.log('Starting conda installation...', { platform, arch, installerUrl });
+    
+    // 检查是否已经下载了安装器
+    if (fs.existsSync(installerPath)) {
+      console.log('Installer already exists, proceeding with installation...');
+      executeInstaller();
+    } else {
+      console.log('Downloading conda installer...');
+      downloadInstaller();
+    }
+    
+    function downloadInstaller() {
+      // 下载miniconda安装器
+      const downloadCommand = `curl -o "${installerPath}" "${installerUrl}"`;
+      
+      const downloadChild = spawn('sh', ['-c', downloadCommand], {
+        stdio: 'pipe',
+        shell: true
+      });
+      
+      let downloadProgress = '';
+      
+      downloadChild.stderr.on('data', (data) => {
+        downloadProgress += data.toString();
+        console.log('Download progress:', data.toString());
+      });
+      
+      downloadChild.on('close', (code) => {
+        if (code === 0) {
+          console.log('Download completed, starting installation...');
+          executeInstaller();
+        } else {
+          reject(new Error(`Failed to download conda installer, exit code: ${code}`));
+        }
+      });
+      
+      downloadChild.on('error', (error) => {
+        reject(new Error(`Download error: ${error.message}`));
+      });
+    }
+    
+    function executeInstaller() {
+      // 执行安装
+      const installCommand = `bash "${installerPath}" -b -p "${installPath}"`;
+      
+      const installChild = spawn('sh', ['-c', installCommand], {
+        stdio: 'pipe',
+        shell: true
+      });
+      
+      let installOutput = '';
+      
+      installChild.stdout.on('data', (data) => {
+        installOutput += data.toString();
+        console.log('Install output:', data.toString());
+      });
+      
+      installChild.stderr.on('data', (data) => {
+        installOutput += data.toString();
+        console.log('Install stderr:', data.toString());
+      });
+      
+      installChild.on('close', (code) => {
+        if (code === 0) {
+          console.log('Conda installation completed successfully');
+          // 清理安装器文件
+          try {
+            fs.unlinkSync(installerPath);
+          } catch (e) {
+            console.log('Warning: Could not delete installer file');
+          }
+          resolve({
+            success: true,
+            condaPath: `${installPath}/bin/conda`,
+            message: 'Conda installed successfully'
+          });
+        } else {
+          reject(new Error(`Installation failed with exit code: ${code}. Output: ${installOutput}`));
+        }
+      });
+      
+      installChild.on('error', (error) => {
+        reject(new Error(`Installation error: ${error.message}`));
+      });
+    }
+  });
 }
 
 // 辅助函数：获取扩展的环境变量
@@ -187,7 +312,7 @@ ipcMain.handle('execute-mineru', async (event, options) => {
     
 
     // 步骤 2: 构建最终要传递给 spawn 的命令和参数
-    const command = getCondaPath();
+    const condaInfo = getCondaPath();
     const env = getExtendedEnv();
     
     // 我们要传递给 'conda' 的参数是 'run -n <环境名> <要执行的命令> ...<命令的参数>'
@@ -198,9 +323,9 @@ ipcMain.handle('execute-mineru', async (event, options) => {
       'mineru', // 要在环境中执行的命令
       ...args // 使用展开语法 (...) 将所有 mineru 的参数附加在后面
     ];
-    console.log('Executing command:', command, finalArgs.join(' '));
+    console.log('Executing command:', condaInfo.path, finalArgs.join(' '));
     // 步骤 3: 使用 spawn 执行命令
-    const child = spawn(command, finalArgs, {
+    const child = spawn(condaInfo.path, finalArgs, {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: env,
       shell: true
@@ -278,14 +403,25 @@ ipcMain.handle('open-output-folder', async (event, folderPath) => {
 
 // 检查 MinerU 是否安装
 ipcMain.handle('check-mineru-installed', async () => {
-  return new Promise((resolve) => {
-    const condaPath = getCondaPath();
+  return new Promise(async (resolve) => {
+    const condaInfo = getCondaPath();
     const env = getExtendedEnv();
     
-    console.log('Using conda path:', condaPath);
+    console.log('Using conda path:', condaInfo.path, 'Found:', condaInfo.found);
+    
+    // 如果没有找到conda，提示用户安装
+    if (!condaInfo.found) {
+      resolve({ 
+        installed: false, 
+        condaFound: false, 
+        needsCondaInstall: true,
+        message: 'Conda not found. Please install conda first.' 
+      });
+      return;
+    }
     
     // 使用 'conda run' 在指定环境中执行命令
-    const child = spawn(condaPath, ['run', '-n', 'MinerU', 'mineru', '--version'], {
+    const child = spawn(condaInfo.path, ['run', '-n', 'MinerU', 'mineru', '--version'], {
       stdio: 'pipe',
       shell: true,
       env: env
@@ -304,12 +440,64 @@ ipcMain.handle('check-mineru-installed', async () => {
     
     child.on('close', (code) => {
       console.log('check-mineru-installed result:', { code, stdout, stderr });
-      resolve(code === 0);
+      resolve({ 
+        installed: code === 0, 
+        condaFound: true, 
+        needsCondaInstall: false,
+        stdout, 
+        stderr 
+      });
     });
 
     child.on('error', (error) => {
       console.log('check-mineru-installed error:', error.message);
-      resolve(false);
+      resolve({ 
+        installed: false, 
+        condaFound: true, 
+        needsCondaInstall: false,
+        error: error.message 
+      });
     });
   });
+});
+
+// 安装 Conda
+ipcMain.handle('install-conda', async (event) => {
+  try {
+    console.log('Starting conda installation process...');
+    event.sender.send('conda-install-progress', { 
+      type: 'info', 
+      message: 'Starting conda installation...' 
+    });
+    
+    const result = await installConda();
+    
+    event.sender.send('conda-install-progress', { 
+      type: 'success', 
+      message: 'Conda installation completed successfully!' 
+    });
+    
+    return result;
+  } catch (error) {
+    console.error('Conda installation failed:', error);
+    
+    event.sender.send('conda-install-progress', { 
+      type: 'error', 
+      message: `Installation failed: ${error.message}` 
+    });
+    
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+});
+
+// 检查 Conda 是否存在（不检查 MinerU）
+ipcMain.handle('check-conda-exists', async () => {
+  const condaInfo = getCondaPath();
+  return {
+    found: condaInfo.found,
+    path: condaInfo.path
+  };
 });
