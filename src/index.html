@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MinerU Desktop</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- 头部 -->
+        <header class="app-header">
+            <div class="header-content">
+                <h1>MinerU Desktop</h1>
+                <p class="subtitle">智能 PDF 解析工具</p>
+            </div>
+            <div class="status-indicator" id="statusIndicator">
+                <span class="status-dot"></span>
+                <span class="status-text">检查中...</span>
+            </div>
+        </header>
+
+        <!-- 主要内容区域 -->
+        <main class="main-content">
+            <!-- 文件选择区域 -->
+            <section class="section">
+                <h2>文件选择</h2>
+                <div class="file-section">
+                    <div class="input-group">
+                        <label for="inputPath">输入文件/文件夹：</label>
+                        <div class="file-input-group">
+                            <input type="text" id="inputPath" placeholder="选择 PDF、PNG、JPG 文件或文件夹" readonly>
+                            <button id="selectInputBtn" class="btn btn-secondary">浏览</button>
+                        </div>
+                        <small class="help-text">支持 PDF、PNG、JPG、JPEG 格式文件</small>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="outputPath">输出目录：</label>
+                        <div class="file-input-group">
+                            <input type="text" id="outputPath" placeholder="选择输出目录" readonly>
+                            <button id="selectOutputBtn" class="btn btn-secondary">浏览</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 参数配置区域 -->
+            <section class="section">
+                <h2>参数配置</h2>
+                <div class="config-grid">
+                    <div class="config-group">
+                        <h3>解析方法</h3>
+                        <div class="input-group">
+                            <label for="method">方法：</label>
+                            <select id="method">
+                                <option value="auto">自动检测</option>
+                                <option value="txt">文本提取</option>
+                                <option value="ocr">OCR 识别</option>
+                            </select>
+                        </div>
+
+                        <div class="input-group">
+                            <label for="backend">后端：</label>
+                            <select id="backend">
+                                <option value="pipeline">Pipeline (通用)</option>
+                                <option value="vlm-transformers">VLM Transformers</option>
+                                <option value="vlm-sglang-engine">VLM SGLang Engine</option>
+                                <option value="vlm-sglang-client">VLM SGLang Client</option>
+                            </select>
+                        </div>
+
+                        <div class="input-group">
+                            <label for="lang">语言：</label>
+                            <select id="lang">
+                                <option value="ch">中文</option>
+                                <option value="en">英文</option>
+                                <option value="korean">韩文</option>
+                                <option value="japan">日文</option>
+                                <option value="chinese_cht">繁体中文</option>
+                                <option value="ta">泰米尔语</option>
+                                <option value="te">泰卢固语</option>
+                                <option value="ka">卡纳达语</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="config-group">
+                        <h3>高级选项</h3>
+                        <div class="input-group">
+                            <label for="url">服务器 URL：</label>
+                            <input type="text" id="url" placeholder="http://127.0.0.1:30000">
+                            <small class="help-text">仅当后端为 sglang-client 时需要</small>
+                        </div>
+
+                        <div class="range-group">
+                            <div class="input-group">
+                                <label for="start">起始页：</label>
+                                <input type="number" id="start" min="0" placeholder="0">
+                            </div>
+                            <div class="input-group">
+                                <label for="end">结束页：</label>
+                                <input type="number" id="end" min="0" placeholder="">
+                            </div>
+                        </div>
+
+                        <div class="checkbox-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="formula" checked>
+                                <span class="checkmark"></span>
+                                启用公式解析
+                            </label>
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="table" checked>
+                                <span class="checkmark"></span>
+                                启用表格解析
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="config-group">
+                        <h3>设备配置</h3>
+                        <div class="input-group">
+                            <label for="device">设备：</label>
+                            <select id="device">
+                                <option value="">默认</option>
+                                <option value="cpu">CPU</option>
+                                <option value="cuda">CUDA</option>
+                                <option value="cuda:0">CUDA:0</option>
+                                <option value="npu">NPU</option>
+                                <option value="npu:0">NPU:0</option>
+                                <option value="mps">MPS</option>
+                            </select>
+                        </div>
+
+                        <div class="input-group">
+                            <label for="vram">显存限制 (MB)：</label>
+                            <input type="number" id="vram" min="0" placeholder="自动">
+                        </div>
+
+                        <div class="input-group">
+                            <label for="source">模型源：</label>
+                            <select id="source">
+                                <option value="huggingface">Hugging Face</option>
+                                <option value="modelscope">ModelScope</option>
+                                <option value="local">本地</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 操作按钮 -->
+            <section class="section">
+                <div class="action-buttons">
+                    <button id="saveSettingsBtn" class="btn btn-secondary">保存设置</button>
+                    <button id="loadSettingsBtn" class="btn btn-secondary">加载设置</button>
+                    <button id="executeBtn" class="btn btn-primary" disabled>开始解析</button>
+                </div>
+            </section>
+
+            <!-- 输出日志区域 -->
+            <section class="section">
+                <h2>执行日志</h2>
+                <div class="log-container">
+                    <div id="logOutput" class="log-output"></div>
+                    <div class="log-actions">
+                        <button id="clearLogBtn" class="btn btn-small">清除日志</button>
+                        <button id="openOutputFolderBtn" class="btn btn-small" disabled>打开输出文件夹</button>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- 加载遮罩 -->
+        <div id="loadingOverlay" class="loading-overlay" style="display: none;">
+            <div class="loading-content">
+                <div class="spinner"></div>
+                <p>正在解析，请稍候...</p>
+                <button id="cancelBtn" class="btn btn-secondary">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="renderer.js"></script>
+</body>
+</html>

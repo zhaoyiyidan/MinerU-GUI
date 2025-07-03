@@ -1,0 +1,31 @@
+# Build outputs - 可以重新构建
+dist/
+build/
+out/
+app-builds/
+
+# Dependencies - 可以通过 npm install 重新安装
+node_modules/
+npm-debug.log*
+yarn-error.log*
+.npm
+
+# Electron 构建缓存
+.cache/
+
+# OS 文件
+.DS_Store
+Thumbs.db
+
+# IDE 文件
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 日志文件
+*.log
+
+# 临时文件
+.tmp/
+temp/
