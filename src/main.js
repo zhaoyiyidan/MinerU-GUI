@@ -2,9 +2,52 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const Store = require('electron-store');
+const fs = require('fs');
+const os = require('os');
 
 // 创建配置存储
 const store = new Store();
+
+// 辅助函数：获取conda的路径
+function getCondaPath() {
+  // 获取常见的conda安装路径
+  const homeDir = os.homedir();
+  const possibleCondaPaths = [
+    '/opt/miniconda3/bin/conda',
+    '/opt/anaconda3/bin/conda',
+    '/usr/local/miniconda3/bin/conda',
+    '/usr/local/anaconda3/bin/conda',
+    `${homeDir}/miniconda3/bin/conda`,
+    `${homeDir}/anaconda3/bin/conda`,
+    `${homeDir}/miniforge3/bin/conda`,
+    '/usr/bin/conda',
+    '/usr/local/bin/conda'
+  ];
+  
+  // 尝试从环境变量中获取conda路径
+  if (process.env.CONDA_EXE) {
+    return process.env.CONDA_EXE;
+  }
+  
+  // 尝试找到conda的实际路径
+  for (const path of possibleCondaPaths) {
+    if (fs.existsSync(path)) {
+      return path;
+    }
+  }
+  
+  // 如果都找不到，返回默认的conda命令
+  return 'conda';
+}
+
+// 辅助函数：获取扩展的环境变量
+function getExtendedEnv() {
+  const homeDir = os.homedir();
+  return { 
+    ...process.env,
+    PATH: process.env.PATH + ':/opt/miniconda3/bin:/opt/anaconda3/bin:/usr/local/miniconda3/bin:/usr/local/anaconda3/bin:' + homeDir + '/miniconda3/bin:' + homeDir + '/anaconda3/bin:' + homeDir + '/miniforge3/bin'
+  };
+}
 
 let mainWindow;
 
@@ -97,7 +140,7 @@ ipcMain.handle('execute-mineru', async (event, options) => {
       '-p', inputPath,
       '-o', outputPath
     ];
-    // 根据传入的参数添加相应的命令行选项
+    
     if (method && method !== 'auto') {
       args.push('-m', method);
     }
@@ -141,9 +184,12 @@ ipcMain.handle('execute-mineru', async (event, options) => {
     if (source && source !== 'huggingface') {
       args.push('--source', source);
     }
+    
+
     // 步骤 2: 构建最终要传递给 spawn 的命令和参数
-    // 我们要执行的命令是 'conda'
-    const command = 'conda';
+    const command = getCondaPath();
+    const env = getExtendedEnv();
+    
     // 我们要传递给 'conda' 的参数是 'run -n <环境名> <要执行的命令> ...<命令的参数>'
     const finalArgs = [
       'run',
@@ -155,7 +201,9 @@ ipcMain.handle('execute-mineru', async (event, options) => {
     console.log('Executing command:', command, finalArgs.join(' '));
     // 步骤 3: 使用 spawn 执行命令
     const child = spawn(command, finalArgs, {
-      stdio: ['pipe', 'pipe', 'pipe']
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: env,
+      shell: true
     });
 
     let stdout = '';
@@ -231,22 +279,36 @@ ipcMain.handle('open-output-folder', async (event, folderPath) => {
 // 检查 MinerU 是否安装
 ipcMain.handle('check-mineru-installed', async () => {
   return new Promise((resolve) => {
+    const condaPath = getCondaPath();
+    const env = getExtendedEnv();
+    
+    console.log('Using conda path:', condaPath);
+    
     // 使用 'conda run' 在指定环境中执行命令
-    // 命令: conda
-    // 参数: ['run', '-n', 'MinerU', 'mineru', '--version']
-    // 这相当于在终端执行 `conda run -n MinerU mineru --version`
-    const child = spawn('conda', ['run', '-n', 'MinerU', 'mineru', '-v'], {
+    const child = spawn(condaPath, ['run', '-n', 'MinerU', 'mineru', '--version'], {
       stdio: 'pipe',
-      // 在某些系统上，特别是Windows，可能需要shell:true
-      // 但最好先在没有它的情况下尝试
-      // shell: true 
+      shell: true,
+      env: env
+    });
+    
+    let stdout = '';
+    let stderr = '';
+    
+    child.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+    
+    child.stderr.on('data', (data) => {
+      stderr += data.toString();
     });
     
     child.on('close', (code) => {
+      console.log('check-mineru-installed result:', { code, stdout, stderr });
       resolve(code === 0);
     });
 
-    child.on('error', () => {
+    child.on('error', (error) => {
+      console.log('check-mineru-installed error:', error.message);
       resolve(false);
     });
   });
