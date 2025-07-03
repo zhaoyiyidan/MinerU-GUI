@@ -97,7 +97,7 @@ ipcMain.handle('execute-mineru', async (event, options) => {
       '-p', inputPath,
       '-o', outputPath
     ];
-    /*
+    // 根据传入的参数添加相应的命令行选项
     if (method && method !== 'auto') {
       args.push('-m', method);
     }
@@ -141,8 +141,6 @@ ipcMain.handle('execute-mineru', async (event, options) => {
     if (source && source !== 'huggingface') {
       args.push('--source', source);
     }
-    */
-   
     // 步骤 2: 构建最终要传递给 spawn 的命令和参数
     // 我们要执行的命令是 'conda'
     const command = 'conda';
